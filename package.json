@@ -1,0 +1,19 @@
+{
+  "name": "worddash-realtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node ./src/server.mjs",
+    "dev": "node --watch ./src/server.mjs",
+    "import:words": "node ./scripts/import-words.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "nanoid": "^5.1.6",
+    "socket.io": "^4.8.1"
+  }
+}
