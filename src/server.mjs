@@ -24,7 +24,7 @@ const CORS_ORIGIN = normalizeOrigin(ALLOWED_ORIGIN);
 const MAX_PLAYERS = 4;
 const GAME_DURATION_MS = 180_000;
 const ROUND_DURATION_MS = 30_000;
-const BASE_SCORE = 100;
+const CORRECT_GUESS_POINTS = 10;
 const ROOM_CODE_LENGTH = 6;
 const createRoomCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", ROOM_CODE_LENGTH);
 
@@ -216,6 +216,16 @@ function maybeDeleteRoom(room) {
 }
 
 function endGame(room, reason = "time_up") {
+  if (room.currentRound) {
+    room.roundHistory.push({
+      word: room.currentRound.word,
+      winnerPlayerId: null,
+      winnerNickname: null,
+      pointsAwarded: 0,
+      reason: reason === "host_ended" ? "host_ended" : "time_up"
+    });
+  }
+
   room.status = "finished";
   room.gameEndsAt = null;
   room.currentRound = null;
@@ -227,20 +237,12 @@ function endGame(room, reason = "time_up") {
     winners: serializePlayers(room)
       .sort((a, b) => b.score - a.score)
       .filter((player, _, arr) => arr[0] && player.score === arr[0].score)
-      .map((player) => player.id)
+      .map((player) => player.id),
+    reviewRows: room.roundHistory
   });
 
   emitRoomState(room);
   maybeDeleteRoom(room);
-}
-
-function getRoundTimeRemainingMs(room) {
-  if (!room.currentRound) return 0;
-  return Math.max(0, room.currentRound.endsAt - nowMs());
-}
-
-function computePoints(remainingMs) {
-  return Math.max(0, Math.round(BASE_SCORE * (remainingMs / ROUND_DURATION_MS)));
 }
 
 function startGlobalTicker(room) {
@@ -259,6 +261,13 @@ function startGlobalTicker(room) {
 
 function finalizeRoundNoGuess(room) {
   if (!room.currentRound || room.status !== "in_game") return;
+  room.roundHistory.push({
+    word: room.currentRound.word,
+    winnerPlayerId: null,
+    winnerNickname: null,
+    pointsAwarded: 0,
+    reason: "time_up"
+  });
   const result = {
     reason: "time_up",
     word: room.currentRound.word,
@@ -321,6 +330,7 @@ async function beginGame(room) {
   room.wordQueue = shuffleRows(words);
   room.gameEndsAt = nowMs() + GAME_DURATION_MS;
   room.currentRound = null;
+  room.roundHistory = [];
 
   for (const player of room.players.values()) {
     player.score = 0;
@@ -341,6 +351,7 @@ function resetForPlayAgain(room) {
   room.currentRound = null;
   room.usedWords.clear();
   room.wordQueue = [];
+  room.roundHistory = [];
 
   for (const player of [...room.players.values()]) {
     if (!player.connected) {
@@ -369,7 +380,8 @@ function createRoomWithHost(socket, nickname) {
     currentRound: null,
     gameEndsAt: null,
     globalTimer: null,
-    roundTimer: null
+    roundTimer: null,
+    roundHistory: []
   };
 
   room.players.set(playerId, {
@@ -534,9 +546,15 @@ io.on("connection", (socket) => {
 
     if (normalizedGuess === room.currentRound.word) {
       room.currentRound.winnerPlayerId = player.id;
-      const remainingMs = getRoundTimeRemainingMs(room);
-      const points = computePoints(remainingMs);
+      const points = CORRECT_GUESS_POINTS;
       player.score += points;
+      room.roundHistory.push({
+        word: room.currentRound.word,
+        winnerPlayerId: player.id,
+        winnerNickname: player.nickname,
+        pointsAwarded: points,
+        reason: "guessed"
+      });
       socket.emit("game:guessResult", {
         status: "correct",
         word: room.currentRound.word,
@@ -552,8 +570,7 @@ io.on("connection", (socket) => {
         word: room.currentRound.word,
         winnerPlayerId: player.id,
         winnerNickname: player.nickname,
-        pointsAwarded: points,
-        remainingMs
+        pointsAwarded: points
       });
 
       emitRoomState(room);
