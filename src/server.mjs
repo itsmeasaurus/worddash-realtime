@@ -12,6 +12,14 @@ const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN ?? "*";
 const GAME_ENABLED = process.env.GAME_ENABLED ?? "true";
 const MAX_ACTIVE_ROOMS = Number(process.env.MAX_ACTIVE_ROOMS ?? 50);
 
+function normalizeOrigin(origin) {
+  const value = String(origin ?? "").trim();
+  if (!value || value === "*") return "*";
+  return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+const CORS_ORIGIN = normalizeOrigin(ALLOWED_ORIGIN);
+
 const MAX_PLAYERS = 4;
 const GAME_DURATION_MS = 180_000;
 const ROUND_DURATION_MS = 30_000;
@@ -25,13 +33,13 @@ const supabaseSecretKey =
 const supabase = supabaseUrl && supabaseSecretKey ? createClient(supabaseUrl, supabaseSecretKey) : null;
 
 const app = express();
-app.use(cors({ origin: ALLOWED_ORIGIN === "*" ? true : ALLOWED_ORIGIN }));
+app.use(cors({ origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN }));
 app.use(express.json());
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ALLOWED_ORIGIN === "*" ? true : ALLOWED_ORIGIN,
+    origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN,
     methods: ["GET", "POST"]
   }
 });
@@ -90,6 +98,20 @@ function emitServerError(socket, message) {
   socket.emit("server:error", { message });
 }
 
+function formatUnknownError(error) {
+  if (error instanceof Error) {
+    const maybeCause = error.cause;
+    if (maybeCause instanceof Error) {
+      return `${error.message} (cause: ${maybeCause.message})`;
+    }
+    if (maybeCause && typeof maybeCause === "object" && "message" in maybeCause) {
+      return `${error.message} (cause: ${String(maybeCause.message)})`;
+    }
+    return error.message;
+  }
+  return String(error);
+}
+
 function clearTimers(room) {
   if (room.globalTimer) {
     clearInterval(room.globalTimer);
@@ -143,11 +165,19 @@ async function fetchWords() {
     return wordsCache.rows;
   }
 
-  const { data, error } = await supabase
-    .schema("worddash")
-    .from("words")
-    .select("word,hint,length")
-    .order("word", { ascending: true });
+  let data;
+  let error;
+  try {
+    const response = await supabase
+      .schema("worddash")
+      .from("words")
+      .select("word,hint,length")
+      .order("word", { ascending: true });
+    data = response.data;
+    error = response.error;
+  } catch (unknownError) {
+    throw new Error(`Failed to fetch words: ${formatUnknownError(unknownError)}`);
+  }
 
   if (error) {
     throw new Error(`Failed to fetch words: ${error.message}`);
@@ -478,8 +508,10 @@ io.on("connection", (socket) => {
       await beginGame(room);
       callback?.({ ok: true });
     } catch (error) {
-      callback?.({ ok: false, message: error.message });
-      emitServerError(socket, error.message);
+      const message = formatUnknownError(error);
+      console.error(`[game:start] room=${socket.data.roomCode ?? "unknown"} player=${socket.data.playerId ?? "unknown"} error=${message}`);
+      callback?.({ ok: false, message });
+      emitServerError(socket, message);
     }
   });
 
@@ -556,6 +588,41 @@ app.get("/health", (_req, res) => {
     activeRooms: countActiveRooms(),
     maxActiveRooms: MAX_ACTIVE_ROOMS
   });
+});
+
+app.get("/health/db", async (_req, res) => {
+  if (!supabase) {
+    res.status(500).json({
+      ok: false,
+      error: "Supabase env is missing."
+    });
+    return;
+  }
+
+  try {
+    const { count, error } = await supabase
+      .schema("worddash")
+      .from("words")
+      .select("*", { count: "exact", head: true });
+
+    if (error) {
+      res.status(500).json({
+        ok: false,
+        error: `Supabase query failed: ${error.message}`
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      wordsCount: count ?? 0
+    });
+  } catch (unknownError) {
+    res.status(500).json({
+      ok: false,
+      error: formatUnknownError(unknownError)
+    });
+  }
 });
 
 app.get("/", (_req, res) => {
