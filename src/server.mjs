@@ -1,5 +1,6 @@
 import "dotenv/config";
 import cors from "cors";
+import dns from "node:dns/promises";
 import express from "express";
 import http from "node:http";
 import process from "node:process";
@@ -102,7 +103,10 @@ function formatUnknownError(error) {
   if (error instanceof Error) {
     const maybeCause = error.cause;
     if (maybeCause instanceof Error) {
-      return `${error.message} (cause: ${maybeCause.message})`;
+      const causeCode = "code" in maybeCause ? String(maybeCause.code) : "";
+      return causeCode
+        ? `${error.message} (cause: ${maybeCause.message}, code: ${causeCode})`
+        : `${error.message} (cause: ${maybeCause.message})`;
     }
     if (maybeCause && typeof maybeCause === "object" && "message" in maybeCause) {
       return `${error.message} (cause: ${String(maybeCause.message)})`;
@@ -623,6 +627,76 @@ app.get("/health/db", async (_req, res) => {
       error: formatUnknownError(unknownError)
     });
   }
+});
+
+app.get("/health/db-debug", async (_req, res) => {
+  if (!supabaseUrl || !supabaseSecretKey) {
+    res.status(500).json({
+      ok: false,
+      error: "Missing SUPABASE_URL or SUPABASE_SECRET_KEY",
+      hasSupabaseUrl: Boolean(supabaseUrl),
+      hasSupabaseSecretKey: Boolean(supabaseSecretKey)
+    });
+    return;
+  }
+
+  let host = "";
+  let restUrl = "";
+  let dnsRecords = [];
+  let dnsError = null;
+  let directFetch = null;
+
+  try {
+    const parsed = new URL(supabaseUrl);
+    host = parsed.hostname;
+    restUrl = `${parsed.origin}/rest/v1/`;
+  } catch (unknownError) {
+    res.status(500).json({
+      ok: false,
+      error: `Invalid SUPABASE_URL: ${formatUnknownError(unknownError)}`,
+      supabaseUrlPreview: String(supabaseUrl).slice(0, 48)
+    });
+    return;
+  }
+
+  try {
+    dnsRecords = await dns.lookup(host, { all: true });
+  } catch (unknownError) {
+    dnsError = formatUnknownError(unknownError);
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const response = await fetch(restUrl, {
+      method: "GET",
+      headers: {
+        apikey: supabaseSecretKey,
+        Authorization: `Bearer ${supabaseSecretKey}`
+      },
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    directFetch = {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText
+    };
+  } catch (unknownError) {
+    directFetch = {
+      ok: false,
+      error: formatUnknownError(unknownError)
+    };
+  }
+
+  res.json({
+    ok: Boolean(directFetch?.ok),
+    host,
+    restUrl,
+    dnsRecords,
+    dnsError,
+    directFetch
+  });
 });
 
 app.get("/", (_req, res) => {
