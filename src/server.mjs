@@ -537,6 +537,11 @@ io.on("connection", (socket) => {
       const remainingMs = getRoundTimeRemainingMs(room);
       const points = computePoints(remainingMs);
       player.score += points;
+      socket.emit("game:guessResult", {
+        status: "correct",
+        word: room.currentRound.word,
+        points
+      });
       if (room.roundTimer) {
         clearTimeout(room.roundTimer);
         room.roundTimer = null;
@@ -554,6 +559,34 @@ io.on("connection", (socket) => {
       emitRoomState(room);
       room.currentRound = null;
       startNextRound(room);
+      return;
+    }
+
+    socket.emit("game:guessResult", {
+      status: "incorrect"
+    });
+  });
+
+  socket.on("game:end", (_payload, callback) => {
+    try {
+      const roomCode = socket.data.roomCode;
+      const playerId = socket.data.playerId;
+      const room = rooms.get(roomCode);
+      if (!room || !playerId) {
+        throw new Error("Room not found.");
+      }
+      if (room.status !== "in_game") {
+        throw new Error("Game is not in progress.");
+      }
+      if (room.hostPlayerId !== playerId) {
+        throw new Error("Only host can end the game.");
+      }
+      endGame(room, "host_ended");
+      callback?.({ ok: true });
+    } catch (error) {
+      const message = formatUnknownError(error);
+      callback?.({ ok: false, message });
+      emitServerError(socket, message);
     }
   });
 
