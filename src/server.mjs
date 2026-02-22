@@ -22,8 +22,9 @@ function normalizeOrigin(origin) {
 const CORS_ORIGIN = normalizeOrigin(ALLOWED_ORIGIN);
 
 const MAX_PLAYERS = 4;
-const GAME_DURATION_MS = 180_000;
-const ROUND_DURATION_MS = 30_000;
+const GAME_DURATION_MS = 180_000; // 3 minutes
+const ROUND_DURATION_MS = 30_000; // 30 seconds
+const ROUND_TRANSITION_DELAY_MS = 2_000;
 const CORRECT_GUESS_POINTS = 10;
 const ROOM_CODE_LENGTH = 4;
 const createRoomCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", ROOM_CODE_LENGTH);
@@ -125,6 +126,10 @@ function clearTimers(room) {
     clearTimeout(room.roundTimer);
     room.roundTimer = null;
   }
+  if (room.roundTransitionTimer) {
+    clearTimeout(room.roundTransitionTimer);
+    room.roundTransitionTimer = null;
+  }
 }
 
 function countActiveRooms() {
@@ -197,7 +202,7 @@ async function fetchWords() {
       hint: normalizeText(row.hint),
       length: Number(row.length)
     })),
-    expiresAt: current + 60_000
+    expiresAt: current + 60_000 
   };
 
   return wordsCache.rows;
@@ -259,6 +264,19 @@ function startGlobalTicker(room) {
   }, 1000);
 }
 
+function scheduleNextRound(room) {
+  if (room.roundTransitionTimer) {
+    clearTimeout(room.roundTransitionTimer);
+    room.roundTransitionTimer = null;
+  }
+
+  room.roundTransitionTimer = setTimeout(() => {
+    room.roundTransitionTimer = null;
+    if (room.status !== "in_game" || room.currentRound) return;
+    startNextRound(room);
+  }, ROUND_TRANSITION_DELAY_MS);
+}
+
 function finalizeRoundNoGuess(room) {
   if (!room.currentRound || room.status !== "in_game") return;
   room.roundHistory.push({
@@ -276,7 +294,7 @@ function finalizeRoundNoGuess(room) {
   };
   room.currentRound = null;
   io.to(room.id).emit("game:roundEnded", result);
-  startNextRound(room);
+  scheduleNextRound(room);
 }
 
 function startNextRound(room) {
@@ -383,6 +401,7 @@ function createRoomWithHost(socket, nickname) {
     gameEndsAt: null,
     globalTimer: null,
     roundTimer: null,
+    roundTransitionTimer: null,
     roundHistory: []
   };
 
@@ -577,7 +596,7 @@ io.on("connection", (socket) => {
 
       emitRoomState(room);
       room.currentRound = null;
-      startNextRound(room);
+      scheduleNextRound(room);
       return;
     }
 
