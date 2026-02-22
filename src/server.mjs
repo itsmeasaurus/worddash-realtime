@@ -25,7 +25,7 @@ const MAX_PLAYERS = 4;
 const GAME_DURATION_MS = 180_000;
 const ROUND_DURATION_MS = 30_000;
 const CORRECT_GUESS_POINTS = 10;
-const ROOM_CODE_LENGTH = 6;
+const ROOM_CODE_LENGTH = 4;
 const createRoomCode = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", ROOM_CODE_LENGTH);
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -370,6 +370,8 @@ function resetForPlayAgain(room) {
 function createRoomWithHost(socket, nickname) {
   const roomCode = createRoomCode();
   const playerId = socket.id;
+  console.log('creating room with host', playerId);
+  console.log('socket object', socket);
   const room = {
     id: roomCode,
     status: "lobby",
