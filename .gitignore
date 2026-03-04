@@ -1,2 +1,5 @@
 .env
 node_modules
+
+# Cursor rules (project-specific AI guidance)
+.cursor
